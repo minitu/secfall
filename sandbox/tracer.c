@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/ptrace.h>
 #include <asm/ptrace-abi.h>
@@ -9,15 +10,109 @@
 #include <sys/user.h>
 #include <sys/syscall.h>
 
+#define MAX_LINES   128
+#define WRONG_OPT   "wrong option: use -h for help\n"
+#define POLICY_NEX  "policy file does not exist\n"
+#define DOT_LINE     "-------------------------------------------------------------\n"
+
+long change_regs(char **line_p, struct user_regs_struct *regs_p) {
+    long ret = 0;
+    char *line = *line_p;
+    char *token, *saveptr;
+
+    while (1) {
+        token = strtok_r(line, " \t", &saveptr);
+        if (token == NULL)
+            break;
+        printf("%s\n", token);
+        line = NULL;
+    }
+
+    // TODO 
+    // regs_p->rax = 
+    
+    return ret;
+}
+
 int main(int argc, char **argv) {
     pid_t child;
     struct user_regs_struct regs;
-    int i;
+    int option = 0;
+    int i = 0;
+    int line_count = 0;
+    
+    FILE *fp;
+    char *line[MAX_LINES] = {NULL};
+    size_t len[MAX_LINES] = {0};
+
+    if (argc < 2)
+        return -1;
+
+    if (strcmp(argv[1], "-p") == 0) {
+        if (argc < 3)
+            return -1;
+
+        argv++;
+    }
+    else if (strcmp(argv[1], "-c") == 0) {
+        if (argc <= 3) {
+            printf(WRONG_OPT);
+            return -1;
+        }
+
+        // read policy file
+        fp = fopen(argv[2], "r");
+        if (fp == NULL) {
+            printf(POLICY_NEX);
+            return -1;
+        }
+
+        while (getline(&line[i], &len[i], fp) != -1) {
+            printf("%s", line[i]);
+            change_regs(&line[i], &regs);
+            i++;
+        }
+        line_count = i;
+
+        // TODO move to later
+        for (i = 0; i < line_count; i++) {
+            free(line[i]);
+        }
+
+        fclose(fp);
+
+        option = 1;
+        argv += 2;
+    }
+    else if (strcmp(argv[1], "-w") == 0) {
+        if (argc <= 3)
+            return -1;
+
+        // TODO
+
+        option = 2;
+        argv += 2;
+    }
+    else if (strcmp(argv[1], "-h") == 0) {
+        printf("TRACER HELP\n\n\t-p [tracee]\n");
+        printf("\t\tprints out system call numbers and their arguments\n\n");
+        printf("\t-c [policy file] [tracee]\n");
+        printf("\t\tchanges system calls according to given policy file\n\n");
+        printf("\t-w [policy file] [tracee]\n");
+        printf("\t\toverwrites memory address according to given policy file\n\n");
+        printf("\t-h\n\t\tshow options\n\n");
+        return 0;
+    }
+    else if (argv[1][0] == '-') {
+        printf(WRONG_OPT);
+        return -1;
+    }
 
     child = fork();
 
     if (child == 0) { // tracee
         ptrace(PTRACE_TRACEME, 0, NULL);
+        
         argv++;
         execvp(argv[0], argv); // execute tracee
     }
@@ -27,9 +122,9 @@ int main(int argc, char **argv) {
         unsigned long long int r[6];
 
         // print headers
-        printf("---------------------------------------------------------\n");
+        printf(DOT_LINE);
         printf("syscall #%6creturn value%10carguments\n", ' ', ' ');
-        printf("---------------------------------------------------------\n");
+        printf(DOT_LINE);
 
         while (1) {
             waitpid(child, &status, 0); // wait for tracee to stop
@@ -46,13 +141,13 @@ int main(int argc, char **argv) {
                 printf("%-22s", "none"); // no return value
 
                 // print arguments
-                printf("0x%llx\n", regs.rdi);
-                printf("%37c0x%llx\n", ' ', regs.rsi);
-                printf("%37c0x%llx\n", ' ', regs.rdx);
-                printf("%37c0x%llx\n", ' ', regs.r10);
-                printf("%37c0x%llx\n", ' ', regs.r8);
-                printf("%37c0x%llx\n", ' ', regs.r9);
-                printf("---------------------------------------------------------\n");
+                printf("rdi: 0x%llx\n", regs.rdi);
+                printf("%37crsi: 0x%llx\n", ' ', regs.rsi);
+                printf("%37crdx: 0x%llx\n", ' ', regs.rdx);
+                printf("%37cr10: 0x%llx\n", ' ', regs.r10);
+                printf("%37cr8:  0x%llx\n", ' ', regs.r8);
+                printf("%37cr9:  0x%llx\n", ' ', regs.r9);
+                printf(DOT_LINE);
             }
             else {
                 if (in_syscall == 0) { // syscall entry
@@ -74,14 +169,15 @@ int main(int argc, char **argv) {
                     printf("0x%-20llx", regs.rax); // print return value
 
                     // print arguments
-                    printf("0x%llx\n", r[0]);
-                    for (i = 1; i < 6; i++) {
-                        printf("%37c0x%llx\n", ' ', r[i]);
-                    }
-                    printf("---------------------------------------------------------\n");
+                    printf("rdi: 0x%llx\n", r[0]);
+                    printf("%37crsi: 0x%llx\n", ' ', r[1]);
+                    printf("%37crdx: 0x%llx\n", ' ', r[2]);
+                    printf("%37cr10: 0x%llx\n", ' ', r[3]);
+                    printf("%37cr8:  0x%llx\n", ' ', r[4]);
+                    printf("%37cr9:  0x%llx\n", ' ', r[5]);
+                    printf(DOT_LINE);
                 }
             }
-
 
             /*
             if (regs.orig_rax == SYS_write) {
@@ -106,7 +202,6 @@ int main(int argc, char **argv) {
 
             ptrace(PTRACE_SYSCALL, child, NULL, NULL); // stop at next syscall (includes CONT)
         }
-        //printf("tracee exited\n");
     }
 
     return 0;
