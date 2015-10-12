@@ -1,10 +1,10 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/ptrace.h>
 #include <asm/ptrace-abi.h>
 #include <wait.h>
-#include <stdlib.h>
 #include <sys/reg.h>
 #include <sys/types.h>
 #include <sys/user.h>
@@ -14,24 +14,69 @@
 #define WRONG_OPT   "wrong option: use -h for help\n"
 #define POLICY_NEX  "policy file does not exist\n"
 #define DOT_LINE     "-------------------------------------------------------------\n"
+    
+int line_count = 0;
+char *line[MAX_LINES] = {NULL};
+size_t len[MAX_LINES] = {0};
 
-long change_regs(char **line_p, struct user_regs_struct *regs_p) {
+void change_regs(unsigned long long int syscall, int line_num, 
+        struct user_regs_struct *regs_p) {
     long ret = 0;
-    char *line = *line_p;
-    char *token, *saveptr;
+    char *l = line[line_num];
+    char *token[8], *orig_token[8], *saveptr;
+    int i = 0;
+    int token_count = 0;
+    int tlen;
 
+    // parse line
     while (1) {
-        token = strtok_r(line, " \t", &saveptr);
-        if (token == NULL)
+        if (i >= 8)
             break;
-        printf("%s\n", token);
-        line = NULL;
+        orig_token[i] = strtok_r(l, " ", &saveptr);
+        if (orig_token[i] == NULL)
+            break;
+        tlen = strlen(orig_token[i]);
+        token[i] = malloc(sizeof(char) * (tlen + 1));
+        strcpy(token[i], orig_token[i]);
+        l = NULL;
+        i++;
     }
 
-    // TODO 
-    // regs_p->rax = 
-    
-    return ret;
+    token_count = i;
+
+    // remove newline character
+    tlen = strlen(token[token_count-1]);
+    token[token_count-1][tlen-1] = '\0';
+
+    // DEBUG
+    for (i = 0; i < token_count; i++) {
+        printf("%s\n", token[i]);
+    }
+
+    // syscall no match
+    if (strtoull(token[0], NULL, 0) != syscall)
+        return;
+
+    // change register values
+    switch(token_count) {
+        case 8:
+            regs_p->r9 = strtoull(token[7], NULL, 0);
+        case 7:
+            regs_p->r8 = strtoull(token[6], NULL, 0);
+        case 6:
+            regs_p->r10 = strtoull(token[5], NULL, 0);
+        case 5:
+            regs_p->rdx = strtoull(token[4], NULL, 0);
+        case 4:
+            regs_p->rsi = strtoull(token[3], NULL, 0);
+        case 3:
+            regs_p->rdi = strtoull(token[2], NULL, 0);
+        case 2:
+            regs_p->orig_rax = strtoull(token[1], NULL, 0); // TODO: correct?
+            break;
+        default:
+            break;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -39,11 +84,7 @@ int main(int argc, char **argv) {
     struct user_regs_struct regs;
     int option = 0;
     int i = 0;
-    int line_count = 0;
-    
     FILE *fp;
-    char *line[MAX_LINES] = {NULL};
-    size_t len[MAX_LINES] = {0};
 
     if (argc < 2)
         return -1;
@@ -68,16 +109,9 @@ int main(int argc, char **argv) {
         }
 
         while (getline(&line[i], &len[i], fp) != -1) {
-            printf("%s", line[i]);
-            change_regs(&line[i], &regs);
             i++;
         }
         line_count = i;
-
-        // TODO move to later
-        for (i = 0; i < line_count; i++) {
-            free(line[i]);
-        }
 
         fclose(fp);
 
@@ -108,6 +142,7 @@ int main(int argc, char **argv) {
         return -1;
     }
 
+    // fork into tracee & tracer
     child = fork();
 
     if (child == 0) { // tracee
@@ -136,6 +171,17 @@ int main(int argc, char **argv) {
 
             if ((regs.orig_rax == __NR_execve && regs.rax == 0) || regs.orig_rax == __NR_exit
                     || regs.orig_rax == __NR_exit_group) { // syscalls with no return values
+
+                // change syscall # and/or arguments TODO call only once per syscall
+                if (option == 1) {
+                    for (i = 0; i < line_count; i++) {
+                        change_regs(regs.orig_rax, i, &regs);
+                    }
+                    ptrace(PTRACE_SETREGS, child, NULL, &regs);
+
+                    ptrace(PTRACE_GETREGS, child, NULL, &regs); // make sure change was correct
+                }
+
                 printf("%-15llu", regs.orig_rax); // print syscall #
 
                 printf("%-22s", "none"); // no return value
