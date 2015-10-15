@@ -8,6 +8,8 @@ int main() {
     int fd = open("output", O_CREAT|O_WRONLY, 0644);
 
     write(fd, "A", 1);
+    write(fd, "C", 1);
+    //write(1, "Hello", 5);
 
     return 0;
 }

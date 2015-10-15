@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 
 #define MAX_LINES   128
 #define NO_TRACEE   "please specify tracee file\n"
@@ -114,23 +115,14 @@ int main(int argc, char **argv) {
         argv += 2;
     }
     else if (strcmp(argv[1], "-a") == 0) {
-
-        // TODO
-
         option = 2;
         argv++;
     }
     else if (strcmp(argv[1], "-b") == 0) {
-
-        // TODO
-
         option = 3;
         argv++;
     }
     else if (strcmp(argv[1], "-c") == 0) {
-
-        // TODO
-
         option = 4;
         argv++;
     }
@@ -216,6 +208,40 @@ int main(int argc, char **argv) {
                         ptrace(PTRACE_SETREGS, child, NULL, &regs);
                         ptrace(PTRACE_GETREGS, child, NULL, &regs);
                     }
+                    else if (option == 2) { // write to stdout
+                        if (regs.orig_rax == __NR_write) {
+                            regs.rdi = STDOUT_FILENO;
+
+                            ptrace(PTRACE_SETREGS, child, NULL, &regs);
+                        }
+                    }
+                    else if (option == 3) { // nullify write buffer
+                        if (regs.orig_rax == __NR_write && regs.rdi == STDOUT_FILENO) {
+                            struct iovec local_iov[1], remote_iov[1];
+                            char *data = malloc(5);
+                            data[0] = 'B';
+                            data[1] = 'E';
+                            data[2] = 'A';
+                            data[3] = 'C';
+                            data[4] = 'H';
+                            
+                            local_iov[0].iov_base = (void*)data;
+                            local_iov[0].iov_len = 5;
+                            remote_iov[0].iov_base = (void*)regs.rsi;
+                            remote_iov[0].iov_len = 5;
+
+                            process_vm_writev(child, local_iov, 1, remote_iov, 1, 0);
+
+                            //ptrace(PTRACE_POKEDATA, child, regs.rsi, data);
+                        }
+                    }
+                    else if (option = 4) { // change writes to reads
+                        if (regs.orig_rax == __NR_write) {
+                            regs.orig_rax = __NR_read;
+
+                            ptrace(PTRACE_SETREGS, child, NULL, &regs);
+                        }
+                    }
 
                     if (verbose) {
                         printf("%-15llu", regs.orig_rax);
@@ -246,27 +272,6 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-
-            /*
-            if (regs.orig_rax == SYS_write) {
-                if (in_syscall == 0) {
-                    in_syscall = 1;
-                    printf("write entry\t");
-                    printf("write(%llu, %p, %llu)\n", regs.rdi, regs.rsi, regs.rdx);
-
-                    regs.rdi = STDOUT_FILENO;
-                    ptrace(PTRACE_SETREGS, child, NULL, &regs);
-
-                    char data = 'B';
-                    ptrace(PTRACE_POKEDATA, child, regs.rsi, &data); // rsi change?
-                }
-                else {
-                    in_syscall = 0;
-                    printf("write exit\t");
-                    printf("rax: %llu\n", regs.orig_rax); // syscall value
-                }
-            }
-            */
 
             ptrace(PTRACE_SYSCALL, child, NULL, NULL); // stop at next syscall (includes CONT)
         }
