@@ -9,7 +9,7 @@ int main() {
 
     write(fd, "A", 1);
     write(fd, "C", 1);
-    //write(1, "Hello", 5);
+    write(1, "Hello", 5);
 
     return 0;
 }
