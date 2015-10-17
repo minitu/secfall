@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
         argv++;
     }
     
-    if (strcmp(argv[1], "-m") == 0) {
+    if (strcmp(argv[1], "-p") == 0) {
         FILE *fp;
         int j;
         char *l, *token[8], *saveptr;
@@ -116,7 +116,8 @@ int main(int argc, char **argv) {
             token_count[i] = j;
 
             tlen = strlen(line_token[i][token_count[i]-1]);
-            line_token[i][token_count[i]-1][tlen-1] = '\0';
+			if (line_token[i][token_count[i]-1][tlen-1] = '\n')
+				line_token[i][token_count[i]-1][tlen-1] = '\0';
         }
 
         option = 1;
@@ -141,7 +142,7 @@ int main(int argc, char **argv) {
         printf("\t-v ... [tracee]\n");
         printf("\t\tPrint out tracee's system call numbers & arguments. (verbose mode)\n");
         printf("\t\tCan be used with other options, but must be the first.\n\n");
-        printf("\t-m [policy file] [tracee]\n");
+        printf("\t-p [policy file] [tracee]\n");
         printf("\t\tModify tracee's system calls according to given policy file.\n");
         printf("\t\tPolicy file is read line by line. For example, a line of\n");
         printf("\t\t'1 2 3 4' will modify system call #1 to #2, and modify the\n");
@@ -226,23 +227,6 @@ int main(int argc, char **argv) {
                     }
                     else if (option == 3) { // nullify write buffer
                         if (regs.orig_rax == __NR_write && regs.rdi == STDOUT_FILENO) {
-                            /*
-                            struct iovec local_iov[1], remote_iov[1];
-                            char *data = malloc(5);
-                            data[0] = 'B';
-                            data[1] = 'E';
-                            data[2] = 'A';
-                            data[3] = 'C';
-                            data[4] = 'H';
-                            
-                            local_iov[0].iov_base = (void*)data;
-                            local_iov[0].iov_len = 5;
-                            remote_iov[0].iov_base = (void*)regs.rsi;
-                            remote_iov[0].iov_len = 5;
-
-                            process_vm_writev(child, local_iov, 1, remote_iov, 1, 0);
-                            */
-
                             ptrace(PTRACE_POKEDATA, child, regs.rsi, 0x00);
                         }
                     }

@@ -10,292 +10,327 @@
 #include <sys/user.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <signal.h>
+
+#define MAX_REJECTS		1024
+#define NUM_FILE		57
+#define NUM_IPC			12
+#define NUM_NETWORK		19
+#define NUM_PROCESS		11
+#define NUM_SIGNAL		15
+#define NUM_DESC		86
+#define NUM_MEMORY		20
 
 #define MAX_LINES   128
-#define NO_TRACEE   "please specify tracee file\n"
+#define NO_TARGET   "please specify target file\n"
 #define WRONG_OPT   "wrong option: use -h for help\n"
 #define POLICY_NEX  "policy file does not exist\n"
+#define POLICY_NG	"wrong policy format\n"
 #define DOT_LINE     "-------------------------------------------------------------\n"
+#define SC_DETECT	"WARNING: SYSTEM CALL DETECTED\n"
+#define SC_KILL		"WARNING: KILLING CHILD\n"
 
-int line_count = 0;
+unsigned long long int sc_file[NUM_FILE] = {2, 4, 6, 21, 59, 76, 79, 80, 82, 83, 84, 85,
+	86, 87, 88, 89, 90, 92, 94, 132, 133, 134, 137, 155, 161, 163, 165, 166, 167, 168,
+	179, 188, 189, 191, 192, 194, 195, 197, 198, 235, 257, 258, 259, 260, 261, 262, 263,
+	264, 265, 266, 267, 268, 269, 280, 301, 303, 316};
+unsigned long long int sc_ipc[NUM_IPC] = {29, 30, 31, 64, 65, 66, 67, 68, 69, 70, 71, 220};
+unsigned long long int sc_network[NUM_NETWORK] = {40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+	50, 51, 52, 53, 54, 55, 288, 299, 307};
+unsigned long long int sc_process[NUM_PROCESS] = {56, 57, 58, 59, 60, 61, 158, 231, 247,
+	272, 297};
+unsigned long long int sc_signal[NUM_SIGNAL] = {13, 14, 15, 34, 62, 127, 128, 129, 130, 131,
+	200, 234, 282, 289, 297};
+unsigned long long int sc_desc[NUM_DESC] = {0, 1, 2, 3, 5, 7, 8, 9, 16, 17, 18, 19, 20, 22,
+	23, 32, 33, 40, 72, 73, 74, 75, 77, 78, 81, 85, 91, 93, 138, 187, 190, 193, 196, 199,
+	213, 217, 221, 232, 233, 253, 254, 255, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266,
+	267, 268, 269, 270, 271, 275, 276, 277, 278, 280, 281, 282, 283, 284, 285, 286, 287, 289,
+	290, 291, 292, 293, 294, 295, 296, 298, 300, 301, 303, 304, 306, 308, 313, 316};
+unsigned long long int sc_memory[NUM_MEMORY] = {9, 10, 11, 12, 25, 26, 27, 28, 30, 67, 149,
+	150, 151, 152, 216, 237, 238, 239, 256, 279};
+
+unsigned long long int rejects[MAX_REJECTS];
+int reject_count = 0;
+
 char *line[MAX_LINES] = {NULL};
-char *line_token[MAX_LINES][8] = {NULL};
-int token_count[MAX_LINES] = {0};
+int line_count = 0;
 size_t len[MAX_LINES] = {0};
 
-void modify_regs_line(int line_num, unsigned long long int syscall, struct user_regs_struct *regs_p) {
-    long ret = 0;
-    long long int check = 0;
-
-    // syscall no match
-    if (strtoull(line_token[line_num][0], NULL, 0) != syscall)
-        return;
-
-    // change register values
-    switch(token_count[line_num]) {
-        case 8:
-            if (strtoll(line_token[line_num][7], NULL, 0) != -1)
-                regs_p->r9 = strtoull(line_token[line_num][7], NULL, 0);
-        case 7:
-            if (strtoll(line_token[line_num][6], NULL, 0) != -1)
-                regs_p->r8 = strtoull(line_token[line_num][6], NULL, 0);
-        case 6:
-            if (strtoll(line_token[line_num][5], NULL, 0) != -1)
-                regs_p->r10 = strtoull(line_token[line_num][5], NULL, 0);
-        case 5:
-            if (strtoll(line_token[line_num][4], NULL, 0) != -1)
-                regs_p->rdx = strtoull(line_token[line_num][4], NULL, 0);
-        case 4:
-            if (strtoll(line_token[line_num][3], NULL, 0) != -1)
-                regs_p->rsi = strtoull(line_token[line_num][3], NULL, 0);
-        case 3:
-            if (strtoll(line_token[line_num][2], NULL, 0) != -1)
-                regs_p->rdi = strtoull(line_token[line_num][2], NULL, 0);
-        case 2:
-            if (strtoll(line_token[line_num][1], NULL, 0) != -1)
-                regs_p->orig_rax = strtoull(line_token[line_num][1], NULL, 0);
-            break;
-        default:
-            break;
-    }
-}
-
 int main(int argc, char **argv) {
-    pid_t child;
-    struct user_regs_struct regs;
-    int option = 0;
-    int verbose = 0;
-    int i = 0;
+	pid_t child;
+	struct user_regs_struct regs;
+	int option = 0;
+	int killflag = 0;
+	int verbose = 0;
+	int flags[7] = {1, 1, 1, 1, 1, 1, 1};
+	int i = 0, j = 0;
 
-    if (argc < 2) {
-        printf(NO_TRACEE);
-        return -1;
-    }
+	if (argc < 2) {
+		printf(NO_TARGET);
+		return -1;
+	}
 
-    if (strcmp(argv[1], "-v") == 0) {
-        verbose = 1;
-        argv++;
-    }
-    
-    if (strcmp(argv[1], "-m") == 0) {
-        FILE *fp;
-        int j;
-        char *l, *token[8], *saveptr;
-        int tlen;
+	if (strcmp(argv[1], "-v") == 0) {
+		verbose = 1;
+		argv++;
+	}
 
-        fp = fopen(argv[2], "r");
-        if (fp == NULL) {
-            printf(POLICY_NEX);
-            return -1;
-        }
+	if (strcmp(argv[1], "-d") == 0) {
+		killflag = 0;
+		argv++;
+	}
+	else if (strcmp(argv[1], "-e") == 0) {
+		killflag = 1;
+		argv++;
+	}
 
-        while (getline(&line[i], &len[i], fp) != -1) {
-            i++;
-        }
-        line_count = i;
+	if (strcmp(argv[1], "-p") == 0) {
+		FILE *fp;
+		char *l, *token[8], *saveptr;
+		int tlen;
 
-        fclose(fp);
+		fp = fopen(argv[2], "r");
+		if (fp == NULL) {
+			printf(POLICY_NEX);
+			return -1;
+		}
 
-        for (i = 0; i < line_count; i++) {
-            l = line[i];
-            j = 0;
+		while (getline(&line[i], &len[i], fp) != -1) {
+			i++;
+		}
+		line_count = i;
 
-            while(1) {
-                if (j >= 8)
-                    break;
-                token[j] = strtok_r(l, " ", &saveptr);
-                if (token[j] == NULL)
-                    break;
-                tlen = strlen(token[j]);
-                line_token[i][j] = malloc(sizeof(char) * (tlen + 1));
-                strcpy(line_token[i][j], token[j]);
-                l = NULL;
-                j++;
-            }
+		fclose(fp);
 
-            token_count[i] = j;
+		if (line_count != 1 && line_count != 2) {
+			printf(POLICY_NG);
+			return -1;
+		}
 
-            tlen = strlen(line_token[i][token_count[i]-1]);
-            line_token[i][token_count[i]-1][tlen-1] = '\0';
-        }
+		tlen = strlen(line[0]);
 
-        option = 1;
-        argv += 2;
-    }
-    else if (strcmp(argv[1], "-a") == 0) {
-        option = 2;
-        argv++;
-    }
-    else if (strcmp(argv[1], "-b") == 0) {
-        option = 3;
-        argv++;
-    }
-    else if (strcmp(argv[1], "-c") == 0) {
-        option = 4;
-        argv++;
-    }
-    else if (strcmp(argv[1], "-h") == 0) {
-        printf("TRACER HELP\n\n");
-        printf("\t[tracee]\n");
-        printf("\t\tPrint out tracee's system call numbers only, in one line.\n\n");
-        printf("\t-v ... [tracee]\n");
-        printf("\t\tPrint out tracee's system call numbers & arguments. (verbose mode)\n");
-        printf("\t\tCan be used with other options, but must be the first.\n\n");
-        printf("\t-m [policy file] [tracee]\n");
-        printf("\t\tModify tracee's system calls according to given policy file.\n");
-        printf("\t\tPolicy file is read line by line. For example, a line of\n");
-        printf("\t\t'1 2 3 4' will modify system call #1 to #2, and modify the\n");
-        printf("\t\tfirst and second arguments to 3 and 4, respectively. If an\n");
-        printf("\t\targument is -1, it will be ignored. Only up to 6 arguments\n");
-        printf("\t\tare allowed, and if the number of arguments do not match \n");
-        printf("\t\tthe modified system call, it may not execute properly.\n\n");
-        printf("\t-h\n\t\tShow help on command line options.\n\n");
-        return 0;
-    }
-    else if (argv[1][0] == '-') {
-        printf(WRONG_OPT);
-        return -1;
-    }
+		if (tlen != 7 && tlen != 8) {
+			printf(POLICY_NG);
+			return -1;
+		}
 
-    // fork into tracee & tracer
-    child = fork();
+		for (i = 0; i < 7; i++) {
+			if (line[0][i] == '0')
+				flags[i] = 0;
+		}
 
-    if (child == 0) { // tracee
-        ptrace(PTRACE_TRACEME, 0, NULL);
-        
-        argv++;
-        execvp(argv[0], argv); // execute tracee
-    }
-    else { // tracer
-        int status;
-        int in_syscall = 0;
-        unsigned long long int r[6];
+		if (line_count == 2) {
+			l = line[1];
+			j = 0;
 
-        if (verbose) {
-            printf(DOT_LINE);
-            printf("syscall #%6creturn value%10carguments\n", ' ', ' ');
-            printf(DOT_LINE);
-        }
+			while (1) {
+				if (j >= MAX_REJECTS) {
+					printf(POLICY_NG);
+					return -1;
+				}
+				token[j] = strtok_r(l, " ", &saveptr);
+				if (token[j] == NULL)
+					break;
+				rejects[j] = strtoull(token[j], NULL, 0);
+				reject_count++;
+				l = NULL;
+				j++;
+			}
+		}
 
-        while (1) { // trace loop
-            waitpid(child, &status, 0);
+		option = 1;
+		argv += 2;
+	}
+	else if (strcmp(argv[1], "-h") == 0) {
+		printf("SANDBOX HELP\n\n");
+		printf("\t-v ... [target]\n");
+		printf("\t\tVerbosely print system call numbers & arguments.\n");
+		printf("\t\tCan be used with other options, but must be the first.\n\n");
+		printf("\t-d ... [target]\n");
+		printf("\t\tPrint denied system call information and continue\n");
+		printf("\t\texecuting target program. Can be used with -v in front,\n");
+		printf("\t\tand -p in back.\n\n");
+		printf("\t-e ... [target]\n");
+		printf("\t\tPrint denied system call information and terminate\n");
+		printf("\t\ttarget program. Can be used with -v in front, and -p\n");
+		printf("\t\tin back.\n\n");
+		printf("\t-p [policy file] [target]\n");
+		printf("\t\tAllow/disallow system calls according to policy file.\n");
+		printf("\t\tFirst line should be a binary of 7 digits, for example\n");
+		printf("\t\t1010001. The digits represent the 7 system call types:\n");
+		printf("\t\tFILE, IPC, NETWORK, PROCESS, SIGNAL, DESC, and MEMORY.\n");
+		printf("\t\tA 1 will disallow the set of system calls, and 0 will\n");
+		printf("\t\tallow them. Second line is optional; if given, it is \n");
+		printf("\t\ta set of system call numbers to be disallowed; space\n");
+		printf("\t\tacting as the delimiter. This must be the last option.\n\n");
+		printf("\t-h\n\t\tShow help on command line options.\n\n");
+		return 0;
+	}
+	else if (argv[1][0] == '-') {
+		printf(WRONG_OPT);
+		return -1;
+	}
 
-            if (WIFEXITED(status) || WIFSIGNALED(status))
-                break;
+	if (flags[0] == 1)
+		for (i = 0; i < NUM_FILE; i++, j++) {
+			rejects[j] = sc_file[i];
+			reject_count++;
+		}
+	if (flags[1] == 1)
+		for (i = 0; i < NUM_IPC; i++, j++) {
+			rejects[j] = sc_ipc[i];
+			reject_count++;
+		}
+	if (flags[2] == 1)
+		for (i = 0; i < NUM_NETWORK; i++, j++) {
+			rejects[j] = sc_network[i];
+			reject_count++;
+		}
+	if (flags[3] == 1)
+		for (i = 0; i < NUM_PROCESS; i++, j++) {
+			rejects[j] = sc_process[i];
+			reject_count++;
+		}
+	if (flags[4] == 1)
+		for (i = 0; i < NUM_SIGNAL; i++, j++) {
+			rejects[j] = sc_signal[i];
+			reject_count++;
+		}
+	if (flags[5] == 1)
+		for (i = 0; i < NUM_DESC; i++, j++) {
+			rejects[j] = sc_desc[i];
+			reject_count++;
+		}
+	if (flags[6] == 1)
+		for (i = 0; i < NUM_MEMORY; i++, j++) {
+			rejects[j] = sc_memory[i];
+			reject_count++;
+		}
 
-            ptrace(PTRACE_GETREGS, child, NULL, &regs);
+	// fork into tracee & tracer
+	child = fork();
 
-            if ((regs.orig_rax == __NR_execve && regs.rax == 0)
-                || regs.orig_rax == __NR_exit
-                || regs.orig_rax == __NR_exit_group) { // syscalls with no return values
+	if (child == 0) { // tracee
+		ptrace(PTRACE_TRACEME, 0, NULL);
 
-                if (verbose) {
-                    printf("%-15llu", regs.orig_rax);
+		argv++;
+		execvp(argv[0], argv); // execute tracee
+	}
+	else { // tracer
+		int status;
+		int detect = 0;
+		int in_syscall = 0;
+		unsigned long long int r[6];
 
-                    printf("%-22s", "none");
+		if (verbose) {
+			printf(DOT_LINE);
+			printf("syscall #%6creturn value%10carguments\n", ' ', ' ');
+			printf(DOT_LINE);
+		}
 
-                    printf("rdi: 0x%llx\n", regs.rdi);
-                    printf("%37crsi: 0x%llx\n", ' ', regs.rsi);
-                    printf("%37crdx: 0x%llx\n", ' ', regs.rdx);
-                    printf("%37cr10: 0x%llx\n", ' ', regs.r10);
-                    printf("%37cr8:  0x%llx\n", ' ', regs.r8);
-                    printf("%37cr9:  0x%llx\n", ' ', regs.r9);
-                    printf(DOT_LINE);
-                }
-                else
-                    printf("%llu ", regs.orig_rax);
+		while (1) { // trace loop
+			detect = 0;
 
-            }
-            else { // syscalls with entry & exit
-                if (in_syscall == 0) { // syscall entry
-                    in_syscall = 1;
+			waitpid(child, &status, 0);
 
-                    if (option == 1) { // modify syscall
-                        for (i = 0; i < line_count; i++)
-                            modify_regs_line(i, regs.orig_rax, &regs);
+			if (WIFEXITED(status) || WIFSIGNALED(status))
+				break;
 
-                        ptrace(PTRACE_SETREGS, child, NULL, &regs);
-                        ptrace(PTRACE_GETREGS, child, NULL, &regs);
-                    }
-                    else if (option == 2) { // write to stdout
-                        if (regs.orig_rax == __NR_write) {
-                            regs.rdi = STDOUT_FILENO;
+			ptrace(PTRACE_GETREGS, child, NULL, &regs);
 
-                            ptrace(PTRACE_SETREGS, child, NULL, &regs);
-                        }
-                    }
-                    else if (option == 3) { // nullify write buffer
-                        if (regs.orig_rax == __NR_write && regs.rdi == STDOUT_FILENO) {
-                            /*
-                            struct iovec local_iov[1], remote_iov[1];
-                            char *data = malloc(5);
-                            data[0] = 'B';
-                            data[1] = 'E';
-                            data[2] = 'A';
-                            data[3] = 'C';
-                            data[4] = 'H';
-                            
-                            local_iov[0].iov_base = (void*)data;
-                            local_iov[0].iov_len = 5;
-                            remote_iov[0].iov_base = (void*)regs.rsi;
-                            remote_iov[0].iov_len = 5;
+			for (i = 0; i < reject_count; i++) {
+				if (regs.orig_rax == rejects[i]) {
+					detect = 1;
+					break;
+				}
+			}
 
-                            process_vm_writev(child, local_iov, 1, remote_iov, 1, 0);
-                            */
+			if ((regs.orig_rax == __NR_execve && regs.rax == 0)
+					|| regs.orig_rax == __NR_exit
+					|| regs.orig_rax == __NR_exit_group) { // syscalls with no return values
 
-                            ptrace(PTRACE_POKEDATA, child, regs.rsi, 0x00);
-                        }
-                    }
-                    else if (option = 4) { // change writes to reads
-                        if (regs.orig_rax == __NR_write) {
-                            regs.orig_rax = __NR_read;
+				if (detect) {
+					printf(SC_DETECT);
+				}
 
-                            ptrace(PTRACE_SETREGS, child, NULL, &regs);
-                        }
-                    }
+				if (verbose) {
+					printf("%-15llu", regs.orig_rax);
 
-                    if (verbose) {
-                        printf("%-15llu", regs.orig_rax);
+					printf("%-22s", "none");
 
-                        r[0] = regs.rdi;
-                        r[1] = regs.rsi;
-                        r[2] = regs.rdx;
-                        r[3] = regs.r10;
-                        r[4] = regs.r8;
-                        r[5] = regs.r9;
-                    }
-                    else
-                        printf("%llu ", regs.orig_rax);
-                }
-                else { // syscall exit
-                    in_syscall = 0;
+					printf("rdi: 0x%llx\n", regs.rdi);
+					printf("%37crsi: 0x%llx\n", ' ', regs.rsi);
+					printf("%37crdx: 0x%llx\n", ' ', regs.rdx);
+					printf("%37cr10: 0x%llx\n", ' ', regs.r10);
+					printf("%37cr8:  0x%llx\n", ' ', regs.r8);
+					printf("%37cr9:  0x%llx\n", ' ', regs.r9);
+					printf(DOT_LINE);
+				}
+				else
+					printf("%llu ", regs.orig_rax);
 
-                    if (verbose) {
-                        printf("0x%-20llx", regs.rax);
+				if (detect && killflag) {
+					kill(child, SIGKILL);
+					printf(SC_KILL);
+				}
+			}
+			else { // syscalls with entry & exit
+				if (in_syscall == 0) { // syscall entry
+					in_syscall = 1;
 
-                        printf("rdi: 0x%llx\n", r[0]);
-                        printf("%37crsi: 0x%llx\n", ' ', r[1]);
-                        printf("%37crdx: 0x%llx\n", ' ', r[2]);
-                        printf("%37cr10: 0x%llx\n", ' ', r[3]);
-                        printf("%37cr8:  0x%llx\n", ' ', r[4]);
-                        printf("%37cr9:  0x%llx\n", ' ', r[5]);
-                        printf(DOT_LINE);
-                    }
-                }
-            }
+					if (detect) {
+						printf(SC_DETECT);
+					}
 
-            ptrace(PTRACE_SYSCALL, child, NULL, NULL); // stop at next syscall (includes CONT)
-        }
+					if (verbose) {
+						printf("%-15llu", regs.orig_rax);
 
-        if (!verbose)
-            printf("\n");
+						r[0] = regs.rdi;
+						r[1] = regs.rsi;
+						r[2] = regs.rdx;
+						r[3] = regs.r10;
+						r[4] = regs.r8;
+						r[5] = regs.r9;
+					}
+					else
+						printf("%llu ", regs.orig_rax);
 
-        if (option == 1) {
-            for (i = 0; i < line_count; i++) {
-                free(line[i]);
-            }
-        }
-    }
+					if (detect && killflag) {
+						kill(child, SIGKILL);
+						if (verbose)
+							printf("\n");
+						printf(SC_KILL);
+					}
+				}
+				else { // syscall exit
+					in_syscall = 0;
 
-    return 0;
+					if (verbose) {
+						printf("0x%-20llx", regs.rax);
+
+						printf("rdi: 0x%llx\n", r[0]);
+						printf("%37crsi: 0x%llx\n", ' ', r[1]);
+						printf("%37crdx: 0x%llx\n", ' ', r[2]);
+						printf("%37cr10: 0x%llx\n", ' ', r[3]);
+						printf("%37cr8:  0x%llx\n", ' ', r[4]);
+						printf("%37cr9:  0x%llx\n", ' ', r[5]);
+						printf(DOT_LINE);
+					}
+				}
+			}
+
+			ptrace(PTRACE_SYSCALL, child, NULL, NULL); // stop at next syscall (includes CONT)
+		}
+
+		if (!verbose)
+			printf("\n");
+
+		if (option == 1) {
+			for (i = 0; i < line_count; i++) {
+				free(line[i]);
+			}
+		}
+	}
+
+	return 0;
 }
