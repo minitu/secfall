@@ -389,6 +389,7 @@ int main(int argc, char **argv) {
 							if (verbose)
 								printf("\n");
 							printf(SC_KILL);
+							return 0;
 						}
 					}
 					else { // syscall exit
